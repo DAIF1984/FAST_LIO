@@ -90,6 +90,8 @@ std::vector<uint8_t> x_star={0x2a};
 //串口换行符
 std::vector<uint8_t> x_1r={0x0d};
 std::vector<uint8_t> x_1n={0x0a};
+//串口时间
+ros::Time serial_start_time;
 
 /******************************/
 
@@ -933,7 +935,7 @@ int main(int argc, char** argv)
         serial::Timeout to = serial::Timeout::simpleTimeout(1000);
         serial_port.setTimeout(to);
         serial_port.open();
-        auto serial_start_time = ros::time::now();
+        serial_start_time = ros::Time::now();
     }
 /***************************************************************************/   
     signal(SIGINT, SigHandle);
@@ -1047,13 +1049,13 @@ int main(int argc, char** argv)
             /**********发布串口数据**********/
             if (serial_port.isOpen()) {
 
-                string str_time_NMEA_hms = rosTimeToNmeaTime_hms(ros::Time().fromSec(lidar_end_time)+serial_start_time);
+                string str_time_NMEA_hms = rosTimeToNmeaTime_hms(ros::Time().fromSec(lidar_end_time+serial_start_time.toSec()));
                 str_time_NMEA_hms = "GPLID," + str_time_NMEA_hms;
                 unsigned char result_xor_1 = std::accumulate(str_time_NMEA_hms.begin(), str_time_NMEA_hms.end(), static_cast<unsigned char>(0), [](unsigned char acc, unsigned char curr) {
                 return acc ^ curr;
                 });
 
-                string str_time_NMEA_ymd = rosTimeToNmeaTime_ymd(ros::Time().fromSec(lidar_end_time)+serial_start_time);
+                string str_time_NMEA_ymd = rosTimeToNmeaTime_ymd(ros::Time().fromSec(lidar_end_time+serial_start_time.toSec()));
                 str_time_NMEA_ymd = "," + str_time_NMEA_ymd;
                 unsigned char result_xor_2 = std::accumulate(str_time_NMEA_ymd.begin(), str_time_NMEA_ymd.end(), static_cast<unsigned char>(0), [](unsigned char acc, unsigned char curr) {
                 return acc ^ curr;
