@@ -24,6 +24,11 @@
 #include <geometry_msgs/Vector3.h>
 #include "use-ikfom.hpp"
 
+//串口输出数据所需的头文件
+#include <serial/serial.h>
+#include <sstream>
+#include <iostream>
+
 /// *************Preconfiguration
 
 #define MAX_INI_COUNT (10)

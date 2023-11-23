@@ -60,6 +60,11 @@
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
 
+//串口输出数据所需的头文件
+#include <serial/serial.h>
+#include <sstream>
+#include <iostream>
+
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
 #define MAXN                (720000)
@@ -72,6 +77,21 @@ double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
 /**************************/
+
+/********串口输出参数**********/
+
+//serial_pub_en表示是否从串口输出里程数据（速度）
+bool serial_pub_en = false;
+//串口创建
+serial::Serial serial_port;
+//串口符号
+std::vector<uint8_t> x_dollar={0x24};
+std::vector<uint8_t> x_star={0x2a};
+//串口换行符
+std::vector<uint8_t> x_1r={0x0d};
+std::vector<uint8_t> x_1n={0x0a};
+
+/******************************/
 
 float res_last[100000] = {0.0};
 float DET_RANGE = 300.0f;
@@ -748,6 +768,53 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     solve_time += omp_get_wtime() - solve_start_;
 }
 
+
+//ros时间转到NMEA时间时分秒
+string rosTimeToNmeaTime_hms(const ros::Time& time)
+{
+  // Convert the ROS time to a time_t struct
+  time_t t = time.toSec();
+
+  // Convert the time_t struct to a tm struct
+  tm* tm_time = gmtime(&t);
+
+  // Create a stringstream to hold the NMEA time string
+  std::stringstream ss;
+
+  // Format the time as yymmddhhmmss.ss
+  ss << std::setw(2) << std::setfill('0') << tm_time->tm_hour
+     << std::setw(2) << std::setfill('0') << tm_time->tm_min
+     << std::setw(2) << std::setfill('0') << tm_time->tm_sec
+     << "." << std::setw(2) << std::setfill('0') << static_cast<int>((time.toSec() - static_cast<int>(time.toSec())) * 100);
+
+
+
+  // Return the NMEA time string
+  return ss.str();
+}
+//ros时间转到NMEA时间年月日
+string rosTimeToNmeaTime_ymd(const ros::Time& time)
+{
+  // Convert the ROS time to a time_t struct
+  time_t t = time.toSec();
+
+  // Convert the time_t struct to a tm struct
+  tm* tm_time = gmtime(&t);
+
+  // Create a stringstream to hold the NMEA time string
+  std::stringstream ss;
+
+  // Format the time as yymmddhhmmss.ss
+  ss << std::setw(2) << std::setfill('0') << (tm_time->tm_year % 100)
+     << std::setw(2) << std::setfill('0') << (tm_time->tm_mon + 1)
+     << std::setw(2) << std::setfill('0') << tm_time->tm_mday;
+
+  // Return the NMEA time string
+  return ss.str();
+}
+
+
+
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "laserMapping");
@@ -757,6 +824,9 @@ int main(int argc, char** argv)
     nh.param<bool>("publish/scan_publish_en",scan_pub_en, true);
     nh.param<bool>("publish/dense_publish_en",dense_pub_en, true);
     nh.param<bool>("publish/scan_bodyframe_pub_en",scan_body_pub_en, true);
+    nh.param<bool>("publish/serial_publish_en", serial_pub_en, true);       // 是否发布当前正在扫描的点云的topic
+
+
     nh.param<int>("max_iteration",NUM_MAX_ITERATIONS,4);
     nh.param<string>("map_file_path",map_file_path,"");
     nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
@@ -852,6 +922,19 @@ int main(int argc, char** argv)
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
             ("/path", 100000);
 //------------------------------------------------------------------------------------------------------
+ 
+ 
+ /***************************************************************************/   
+ //串口创建
+    if (serial_pub_en)
+    {
+        serial_port.setPort("/dev/ttyUSB0"); // 打开串口设备
+        serial_port.setBaudrate(115200);
+        serial::Timeout to = serial::Timeout::simpleTimeout(1000);
+        serial_port.setTimeout(to);
+        serial_port.open();
+    }
+/***************************************************************************/   
     signal(SIGINT, SigHandle);
     ros::Rate rate(5000);
     bool status = ros::ok();
@@ -958,8 +1041,59 @@ int main(int argc, char** argv)
             geoQuat.y = state_point.rot.coeffs()[1];
             geoQuat.z = state_point.rot.coeffs()[2];
             geoQuat.w = state_point.rot.coeffs()[3];
-
             double t_update_end = omp_get_wtime();
+
+            /**********发布串口数据**********/
+            if (serial_port.isOpen()) {
+
+                string str_time_NMEA_hms = rosTimeToNmeaTime_hms(ros::Time().fromSec(lidar_end_time));
+                str_time_NMEA_hms = "GPLID," + str_time_NMEA_hms;
+                unsigned char result_xor_1 = std::accumulate(str_time_NMEA_hms.begin(), str_time_NMEA_hms.end(), static_cast<unsigned char>(0), [](unsigned char acc, unsigned char curr) {
+                return acc ^ curr;
+                });
+
+                string str_time_NMEA_ymd = rosTimeToNmeaTime_ymd(ros::Time().fromSec(lidar_end_time));
+                str_time_NMEA_ymd = "," + str_time_NMEA_ymd;
+                unsigned char result_xor_2 = std::accumulate(str_time_NMEA_ymd.begin(), str_time_NMEA_ymd.end(), static_cast<unsigned char>(0), [](unsigned char acc, unsigned char curr) {
+                return acc ^ curr;
+                });
+
+                int32_t result_estim_x = static_cast<int32_t>(state_point.vel(0)* 1e4);
+                int32_t result_estim_y = static_cast<int32_t>(state_point.vel(1)* 1e4);
+                int32_t result_estim_z = static_cast<int32_t>(state_point.vel(2)* 1e4);
+                
+                static char initial_flag; 
+                if(flg_EKF_inited) {
+                    initial_flag = 'K';
+                }
+                else
+                {
+                    initial_flag= 'I';
+                }
+                
+                std::stringstream ss;
+                ss <<","<<result_estim_x<<","<<result_estim_y<<","<<result_estim_z<<","<<initial_flag;
+                string str_vel = ss.str();                
+
+                unsigned char result_xor_3 = std::accumulate(str_vel.begin(), str_vel.end(), static_cast<unsigned char>(0), [](unsigned char acc, unsigned char curr) {
+                return acc ^ curr;
+                });
+                unsigned char result_xor_4 = result_xor_1 ^ result_xor_2 ^ result_xor_3;
+                std::stringstream ss_1;
+                ss_1 << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << static_cast<int>(result_xor_4);
+                string str_check = ss_1.str();
+                
+                serial_port.write(x_dollar);
+                serial_port.write(str_time_NMEA_hms);
+                serial_port.write(str_vel);
+                serial_port.write(str_time_NMEA_ymd);
+                serial_port.write(x_star);
+                serial_port.write(str_check);
+                serial_port.write(x_1r);
+                serial_port.write(x_1n);
+
+            } 
+
 
             /******* Publish odometry *******/
             publish_odometry(pubOdomAftMapped);
@@ -1043,6 +1177,11 @@ int main(int argc, char** argv)
         }
         fclose(fp2);
     }
-
+    //关闭串口
+    if(serial_port.isOpen())
+    {
+        serial_port.close();
+        ROS_INFO("Serial port closed successfully.");
+    }   
     return 0;
 }
